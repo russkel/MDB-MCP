@@ -1,6 +1,7 @@
 """GDB debugging tools and utilities."""
 
 import logging
+import socket
 import subprocess
 import time
 import shutil
@@ -61,12 +62,13 @@ def format_gdb_response(response: List[Dict[str, Any]], max_lines: int = 400) ->
     
     if not formatted_lines:
         return "Command executed"
-    if len(formatted_lines) > max_lines:
-        elided = len(formatted_lines) - max_lines
-        formatted_lines = formatted_lines[:max_lines]
-        formatted_lines.append(
+    lines = '\n'.join(formatted_lines).split('\n')
+    if len(lines) > max_lines:
+        elided = len(lines) - max_lines
+        lines = lines[:max_lines]
+        lines.append(
             f"…[{elided} lines elided — re-run with an explicit range/length]")
-    return '\n'.join(formatted_lines)
+    return '\n'.join(lines)
 
 class GDBTools(DebuggerTools):
     """Collection of GDB debugging tools."""
@@ -132,13 +134,30 @@ class GDBTools(DebuggerTools):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         self.sessionManager.attach_rr_process(session_id, proc)
-        time.sleep(2)  # give rr's gdbserver time to bind the port
-        if proc.poll() is not None:
+        # Wait for rr's gdbserver to bind the port (deterministic, no fixed sleep).
+        for _ in range(50):  # ~10s max at 0.2s/iter
+            if proc.poll() is not None:
+                self.sessionManager._kill_rr_process(session_id)
+                return f"Error: rr replay exited early (code {proc.returncode})"
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        else:
             self.sessionManager._kill_rr_process(session_id)
-            return f"Error: rr replay exited early (code {proc.returncode})"
+            return f"Error: rr gdbserver did not bind port {port} in time"
         response = gdb.write(f"target extended-remote :{port}")
-        # rr serves target files over the remote link, which is slow and noisy;
-        # point sysroot at the local fs (matches rr's own gdb launch line).
+        # pygdbmi does NOT raise on a gdb-level error; detect a failed connect.
+        connected = not any(
+            m.get("type") == "result" and m.get("message") == "error"
+            for m in response
+        )
+        if not connected:
+            self.sessionManager._kill_rr_process(session_id)
+            return f"Error: failed to connect to rr gdbserver on :{port}: {format_gdb_response(response)}"
+        # Local-architecture trace: point sysroot at the local fs to avoid slow
+        # remote file transfers (matches rr's own gdb launch line).
         gdb.write("set sysroot /")
         return format_gdb_response(response)
     

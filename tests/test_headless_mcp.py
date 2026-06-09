@@ -36,3 +36,54 @@ def test_session_sources_gef_fork_and_headless_works():
         assert "regs[" in out
     finally:
         sm.terminate_session(sid)
+
+
+def test_guardrail_caps_rendered_lines_in_single_payload():
+    one_big = [{"type": "console",
+                "payload": "\n".join(f"row {i}" for i in range(5000))}]
+    out = format_gdb_response(one_big, max_lines=200)
+    assert out.count("\n") <= 210
+    assert "lines elided" in out
+
+
+class _FakeProc:
+    def __init__(self):
+        self.alive = True
+        self.terminated = False
+    def poll(self):
+        return None if self.alive else 0
+    def terminate(self):
+        self.terminated = True
+        self.alive = False
+    def wait(self, timeout=None):
+        return 0
+    def kill(self):
+        self.alive = False
+
+
+def test_terminate_session_kills_rr_process():
+    sm = GDBSessionManager()
+    class _FakeGdb:
+        def exit(self):
+            pass
+    fake = _FakeProc()
+    sm.sessions["sid-x"] = _FakeGdb()
+    sm.rr_processes["sid-x"] = fake
+    assert sm.terminate_session("sid-x") is True
+    assert fake.terminated is True
+    assert "sid-x" not in sm.rr_processes
+
+
+def test_create_session_passes_nx_and_gef_source(monkeypatch):
+    import modules.gdb.sessionManager as smmod
+    captured = {}
+
+    class _FakeController:
+        def __init__(self, command=None):
+            captured["command"] = command
+
+    monkeypatch.setattr(smmod, "GdbController", _FakeController)
+    sm = smmod.GDBSessionManager()
+    sm.create_session("gdb", gef_path="/x/gef.py")
+    assert captured["command"] == [
+        "gdb", "-nx", "--interpreter=mi3", "-ex", "source /x/gef.py"]
