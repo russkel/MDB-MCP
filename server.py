@@ -78,10 +78,11 @@ def debugger_command(session_id: str, command: str) -> str:
     
 # GDB-specific tools (use gdb_command for advanced features)
 @mcp.tool()
-def gdb_start(gdb_path: str = "gdb") -> str:
-    """Start a new GDB debugging session."""
+def gdb_start(gdb_path: str = "gdb", gef_path: str = None) -> str:
+    """Start a new GDB session. If gef_path is given, gdb starts with `-nx` and
+    sources that gef.py (use the headless fork for token-efficient output)."""
     try:
-        return _get_gdb_tools().start_session(gdb_path)
+        return _get_gdb_tools().start_session(gdb_path, gef_path)
     except Exception as e:
         return f"Error: {str(e)}"
 

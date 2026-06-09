@@ -13,12 +13,15 @@ class GDBSessionManager(DebuggerSessionManager):
     def __init__(self):
         self.sessions: Dict[str, GdbController] = {}
     
-    def create_session(self, gdb_path: str = "gdb") -> str:
+    def create_session(self, gdb_path: str = "gdb", gef_path: str = None) -> str:
         session_id = str(uuid.uuid4())
+        command = [gdb_path, "-nx", "--interpreter=mi3"]
+        if gef_path:
+            command += ["-ex", f"source {gef_path}"]
         try:
-            gdb_controller = GdbController(command=[gdb_path, "--interpreter=mi3"])
+            gdb_controller = GdbController(command=command)
             self.sessions[session_id] = gdb_controller
-            logger.info(f"Started GDB session: {session_id}")
+            logger.info(f"Started GDB session: {session_id} (gef_path={gef_path})")
             return session_id
         except Exception as e:
             logger.error(f"Failed to start GDB session: {e}")

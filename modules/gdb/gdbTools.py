@@ -73,8 +73,8 @@ class GDBTools(DebuggerTools):
         self.sessionManager = session_manager
     
     @handle_gdb_errors("starting GDB session")
-    def start_session(self, gdb_path: str = "gdb") -> str:
-        session_id = self.sessionManager.create_session(gdb_path)
+    def start_session(self, gdb_path: str = "gdb", gef_path: str = None) -> str:
+        session_id = self.sessionManager.create_session(gdb_path, gef_path)
         return f"GDB session started successfully. Session ID: {session_id}"
     
     @handle_gdb_errors("terminating session")
