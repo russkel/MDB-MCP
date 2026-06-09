@@ -1,6 +1,9 @@
 """GDB debugging tools and utilities."""
 
 import logging
+import subprocess
+import time
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Callable
 from functools import wraps
@@ -111,6 +114,32 @@ class GDBTools(DebuggerTools):
     def attach_to_process(self, session_id: str, pid: int) -> str:
         gdb = self.sessionManager.get_session(session_id)
         response = gdb.write(f"attach {pid}")
+        return format_gdb_response(response)
+
+    @handle_gdb_errors("starting rr replay")
+    def rr_replay(self, session_id: str, trace_dir: str, port: int = 50505) -> str:
+        """Start `rr replay` as a gdbserver on `port` and connect this session to it.
+
+        Recording (`rr record`) is a manual user step; `trace_dir` is an existing trace.
+        """
+        gdb = self.sessionManager.get_session(session_id)
+        if shutil.which("rr") is None:
+            return "Error: rr is not installed"
+        if not Path(trace_dir).exists():
+            return f"Error: trace dir '{trace_dir}' does not exist"
+        proc = subprocess.Popen(
+            ["rr", "replay", "-s", str(port), "--keep-listening", trace_dir],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.sessionManager.attach_rr_process(session_id, proc)
+        time.sleep(2)  # give rr's gdbserver time to bind the port
+        if proc.poll() is not None:
+            self.sessionManager._kill_rr_process(session_id)
+            return f"Error: rr replay exited early (code {proc.returncode})"
+        response = gdb.write(f"target extended-remote :{port}")
+        # rr serves target files over the remote link, which is slow and noisy;
+        # point sysroot at the local fs (matches rr's own gdb launch line).
+        gdb.write("set sysroot /")
         return format_gdb_response(response)
     
     @handle_gdb_errors("loading core dump")

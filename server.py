@@ -110,6 +110,18 @@ def gdb_command(session_id: str, command: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
+@mcp.tool()
+def gdb_rr_replay(session_id: str, trace_dir: str, port: int = 50505) -> str:
+    """Connect a GDB session to an rr time-travel trace via the gdbserver bridge.
+
+    Enables reverse-continue / reverse-step / reverse-next and backwards watchpoints.
+    `trace_dir` must be an existing rr trace (record it beforehand with `rr record`).
+    """
+    try:
+        return _get_gdb_tools().rr_replay(session_id, trace_dir, port)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 @mcp.resource("gdb://sessions")
 def list_gdb_sessions() -> str:
     """Resource that provides information about active GDB sessions."""
