@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+import subprocess
 from typing import Dict
 from pygdbmi.gdbcontroller import GdbController
 from ..base.debuggerBase import DebuggerSessionManager
@@ -12,6 +13,7 @@ class GDBSessionManager(DebuggerSessionManager):
     
     def __init__(self):
         self.sessions: Dict[str, GdbController] = {}
+        self.rr_processes: Dict[str, "subprocess.Popen"] = {}
     
     def create_session(self, gdb_path: str = "gdb", gef_path: str = None) -> str:
         session_id = str(uuid.uuid4())
@@ -43,6 +45,7 @@ class GDBSessionManager(DebuggerSessionManager):
         if session_id not in self.sessions:
             return False
         try:
+            self._kill_rr_process(session_id)
             gdb = self.sessions[session_id]
             gdb.exit()
             del self.sessions[session_id]
@@ -58,6 +61,22 @@ class GDBSessionManager(DebuggerSessionManager):
     
     def has_session(self, session_id: str) -> bool:
         return session_id in self.sessions
+
+    def attach_rr_process(self, session_id: str, proc: "subprocess.Popen") -> None:
+        """Track an rr replay gdbserver bound to a session, for teardown."""
+        self.rr_processes[session_id] = proc
+
+    def _kill_rr_process(self, session_id: str) -> None:
+        proc = self.rr_processes.pop(session_id, None)
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
     
     def _is_session_alive(self, gdb: GdbController) -> bool:
         """Check if a GDB session is still alive."""
@@ -72,6 +91,7 @@ class GDBSessionManager(DebuggerSessionManager):
         """Clean up a single dead session."""
         try:
             if session_id in self.sessions:
+                self._kill_rr_process(session_id)
                 gdb = self.sessions[session_id]
                 try:
                     gdb.exit()
