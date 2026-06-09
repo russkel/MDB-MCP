@@ -8,11 +8,24 @@ or other AI assistants.
 """
 
 import logging
+import os
 from mcp.server.fastmcp import FastMCP
 from modules import DebuggerFactory
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Path to a GEF fork bundled as a sibling of this server (e.g. the plugin's
+# vendor/gef next to vendor/MDB-MCP). Used as the default gef_path for gdb_start.
+_BUNDLED_GEF = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gef", "gef.py"))
+
+
+def _resolve_gef_path(gef_path):
+    """If no explicit gef_path is given, fall back to a bundled sibling gef.py."""
+    if gef_path is None and os.path.isfile(_BUNDLED_GEF):
+        return _BUNDLED_GEF
+    return gef_path
 
 try:
     debugger_tools, debugger_type = DebuggerFactory.create_tools()
@@ -79,10 +92,10 @@ def debugger_command(session_id: str, command: str) -> str:
 # GDB-specific tools (use gdb_command for advanced features)
 @mcp.tool()
 def gdb_start(gdb_path: str = "gdb", gef_path: str = None) -> str:
-    """Start a new GDB session. If gef_path is given, gdb starts with `-nx` and
-    sources that gef.py (use the headless fork for token-efficient output)."""
+    """Start a new GDB session. Sources a headless GEF fork: the explicit gef_path
+    if given, else a bundled sibling gef.py if present. gdb launches with `-nx`."""
     try:
-        return _get_gdb_tools().start_session(gdb_path, gef_path)
+        return _get_gdb_tools().start_session(gdb_path, _resolve_gef_path(gef_path))
     except Exception as e:
         return f"Error: {str(e)}"
 
