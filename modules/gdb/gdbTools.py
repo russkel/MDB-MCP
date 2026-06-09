@@ -30,15 +30,15 @@ def handle_gdb_errors(operation: str) -> Callable:
         return wrapper
     return decorator
 
-def format_gdb_response(response: List[Dict[str, Any]]) -> str:
-    """Format GDB response for better readability."""
+def format_gdb_response(response: List[Dict[str, Any]], max_lines: int = 400) -> str:
+    """Format GDB response for better readability, capping total lines."""
     if not response:
         return "No response from GDB"
     
     formatted_lines = []
     for msg in response:
         msg_type = msg.get('type', 'unknown')
-        payload = msg.get('payload', '')
+        payload = str(msg.get('payload', '')).rstrip("\n")
         
         if msg_type == 'console':
             formatted_lines.append(f"Console: {payload}")
@@ -56,7 +56,14 @@ def format_gdb_response(response: List[Dict[str, Any]]) -> str:
         else:
             formatted_lines.append(f"{msg_type.title()}: {payload}")
     
-    return '\n'.join(formatted_lines) if formatted_lines else "Command executed"
+    if not formatted_lines:
+        return "Command executed"
+    if len(formatted_lines) > max_lines:
+        elided = len(formatted_lines) - max_lines
+        formatted_lines = formatted_lines[:max_lines]
+        formatted_lines.append(
+            f"…[{elided} lines elided — re-run with an explicit range/length]")
+    return '\n'.join(formatted_lines)
 
 class GDBTools(DebuggerTools):
     """Collection of GDB debugging tools."""
