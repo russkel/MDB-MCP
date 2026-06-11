@@ -154,6 +154,59 @@ def gdb_rr_replay(session_id: str, trace_dir: str, port: int = 50505) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
+@mcp.tool()
+def gdb_registers(session_id: str, names: list = None) -> str:
+    """Structured registers as a compact TOON table `regs[N]{reg,val}:`.
+
+    Backed by gdb's native Python API (works on a coredump, and even without GEF).
+    Defaults to the 'general' register group; pass `names` (e.g. ["rip","rsp","rdi"])
+    to fetch only specific registers. Prefer this over scraping `info registers`.
+    """
+    try:
+        return _get_gdb_tools().registers_toon(session_id, names)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@mcp.tool()
+def gdb_read_mem(session_id: str, address: str, count: int) -> str:
+    """Read memory and return GEF-style `hex[N]{addr,bytes,ascii}:` (TOON).
+
+    `address` is any gdb expression (`$pc`, `$sp+0x20`, `&var`, a symbol). `count` is
+    bytes, hard-capped server-side so output stays bounded. Native gdb API — works on a
+    coredump. Prefer this over `x/...` for predictable, compact dumps.
+    """
+    try:
+        return _get_gdb_tools().read_memory_toon(session_id, address, count)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@mcp.tool()
+def gdb_maps(session_id: str, name_filter: str = None) -> str:
+    """Memory map as `maps[N]{start,end,perm,path}:` (TOON) via GEF's gef.memory.maps.
+
+    Far cheaper than dumping full `vmmap` / `info proc mappings`. `name_filter` keeps
+    only rows whose path contains that substring (e.g. "libc", "foxglove"). Requires
+    GEF to be loaded. Row count is capped with an elision note.
+    """
+    try:
+        return _get_gdb_tools().maps_toon(session_id, name_filter)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@mcp.tool()
+def gdb_python(session_id: str, code: str) -> str:
+    """Escape hatch: run an arbitrary Python snippet inside gdb and return its stdout.
+
+    `gdb` and (when loaded) `gef` are in scope, so the full GEF Python API
+    (`gef.arch`, `gef.memory`, `gef.heap`, `parse_address(...)`) is reachable for
+    one-off structured extraction the dedicated tools don't cover. `print(...)` what
+    you need and keep it small — output goes through the normal line cap.
+    """
+    try:
+        return _get_gdb_tools().run_python(session_id, code)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 @mcp.resource("gdb://sessions")
 def list_gdb_sessions() -> str:
     """Resource that provides information about active GDB sessions."""

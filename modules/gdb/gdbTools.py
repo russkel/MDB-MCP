@@ -1,5 +1,6 @@
 """GDB debugging tools and utilities."""
 
+import json
 import logging
 import socket
 import subprocess
@@ -9,9 +10,19 @@ from pathlib import Path
 from typing import List, Dict, Any, Callable
 from functools import wraps
 from .sessionManager import GDBSessionManager
+from .toon import encode_table, encode_hexdump
 from ..base.debuggerBase import DebuggerTools
 
 logger = logging.getLogger(__name__)
+
+# Marker used to fish a JSON payload back out of gdb's console stream when we run a
+# Python snippet inside gdb. json.dumps emits a single line (no newlines), so the
+# payload is everything between the marker and the next newline.
+_JSON_MARK = "MDBJSON:"
+
+# Bounds — structured tools must never flood the model's context.
+_READ_MEM_MAX = 4096      # bytes per gdb_read_mem call
+_MAPS_MAX_ROWS = 500      # rows per gdb_maps call
 
 def handle_gdb_errors(operation: str) -> Callable:
     """Decorator to handle GDB operation errors consistently."""
@@ -358,4 +369,138 @@ class GDBTools(DebuggerTools):
     def list_source_files(self, session_id: str) -> str:
         gdb = self.sessionManager.get_session(session_id)
         response = gdb.write("-file-list-exec-source-files")
+        return format_gdb_response(response)
+
+    # --- Structured tools (gdb/GEF Python API -> TOON) -------------------------
+    # These run a Python snippet inside gdb that builds a JSON-able object in the
+    # variable `__mdb_out`, ship it back via the JSON marker, and re-encode it as a
+    # compact TOON table for the model. Registers/memory use gdb's *native* Python
+    # API (stable, and works even if GEF didn't load); maps use GEF's richer view.
+
+    def _run_python_json(self, session_id: str, snippet: str):
+        """Execute `snippet` (which must set `__mdb_out`) inside gdb and return
+        (ok, parsed_obj_or_error_text)."""
+        gdb = self.sessionManager.get_session(session_id)
+        # `set width 0` stops gdb wrapping the printed JSON across multiple lines
+        # (which would otherwise split our single-line payload); pagination off
+        # avoids a "---Type <return>---" prompt on long output.
+        program = (
+            "import gdb as _gdb\n"
+            "_gdb.execute('set width 0', to_string=True)\n"
+            "_gdb.execute('set pagination off', to_string=True)\n"
+            + snippet
+            + f"\nimport json as _j\nprint({_JSON_MARK!r} + _j.dumps(__mdb_out))"
+        )
+
+        def _find_blob(records):
+            # Scan only program output, NOT 'log' records — gdb echoes the MI command
+            # there, and the echoed source literally contains "MDBJSON:" + the marker,
+            # which would otherwise match before the real printed line.
+            text = "".join(str(m.get("payload", "")) for m in records
+                           if m.get("type") != "log")
+            i = text.find(_JSON_MARK)
+            if i == -1:
+                return None
+            return text[i + len(_JSON_MARK):].split("\n", 1)[0].strip()
+
+        # `python exec(<repr>)` keeps the whole multi-line program on one MI line.
+        # pygdbmi returns at the command's `^done`, but the snippet's `print` console
+        # line can land in a *later* read — so drain follow-up responses until the
+        # marker appears (or we settle).
+        records = list(gdb.write("python exec(%r)" % program,
+                                 timeout_sec=2, raise_error_on_timeout=False))
+        blob = _find_blob(records)
+        attempts = 0
+        while blob is None and attempts < 15:
+            more = gdb.get_gdb_response(timeout_sec=0.2, raise_error_on_timeout=False)
+            attempts += 1
+            if more:
+                records += more
+                blob = _find_blob(records)
+        if blob is None:
+            return False, format_gdb_response(records)
+        try:
+            return True, json.loads(blob)
+        except json.JSONDecodeError:
+            return False, format_gdb_response(records)
+
+    @handle_gdb_errors("reading registers")
+    def registers_toon(self, session_id: str, names: List[str] = None) -> str:
+        """Registers as a `regs[N]{reg,val}:` TOON table. Defaults to the 'general'
+        register group (skips the hundreds of vector/segment regs); pass `names` to
+        filter. Native gdb API — works on a coredump and without GEF."""
+        snippet = (
+            "import gdb\n"
+            "frame = gdb.selected_frame()\n"
+            "arch = frame.architecture()\n"
+            f"want = {repr(list(names) if names else None)}\n"
+            "rows = []\n"
+            "for rd in arch.registers('general'):\n"
+            "    nm = rd.name\n"
+            "    if want and nm not in want:\n"
+            "        continue\n"
+            "    try:\n"
+            "        v = int(frame.read_register(nm)) & ((1 << 64) - 1)\n"
+            "        rows.append([nm, hex(v)])\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "__mdb_out = rows\n"
+        )
+        ok, obj = self._run_python_json(session_id, snippet)
+        if not ok:
+            return f"Error reading registers (is a frame selected / program loaded?): {obj}"
+        return encode_table("regs", ["reg", "val"], obj)
+
+    @handle_gdb_errors("reading memory")
+    def read_memory_toon(self, session_id: str, address: str, count: int) -> str:
+        """Read `count` bytes at `address` (any gdb expression, e.g. `$pc`, `$sp+0x20`,
+        a symbol) and render GEF-style `hex[N]{addr,bytes,ascii}:`. Native gdb API."""
+        n = max(0, min(int(count), _READ_MEM_MAX))
+        if n == 0:
+            return "hex[0]{addr,bytes,ascii}:"
+        snippet = (
+            "import gdb\n"
+            f"addr = int(gdb.parse_and_eval({address!r})) & ((1 << 64) - 1)\n"
+            f"data = bytes(gdb.selected_inferior().read_memory(addr, {n}))\n"
+            "__mdb_out = {'base': addr, 'hex': data.hex()}\n"
+        )
+        ok, obj = self._run_python_json(session_id, snippet)
+        if not ok:
+            return f"Error reading memory at {address}: {obj}"
+        out = encode_hexdump(obj["base"], bytes.fromhex(obj["hex"]))
+        if int(count) > _READ_MEM_MAX:
+            out += f"\n  …[capped at {_READ_MEM_MAX} bytes — re-run from a higher address for more]"
+        return out
+
+    @handle_gdb_errors("listing memory maps")
+    def maps_toon(self, session_id: str, name_filter: str = None) -> str:
+        """Memory map as `maps[N]{start,end,perm,path}:` via GEF's `gef.memory.maps`
+        (richer than scraping `info proc mappings`). Requires GEF to be loaded;
+        `name_filter` keeps only rows whose path contains that substring."""
+        snippet = (
+            f"flt = {repr(name_filter)}\n"
+            "rows = []\n"
+            "for s in gef.memory.maps:\n"
+            "    p = s.path or ''\n"
+            "    if flt and flt not in p:\n"
+            "        continue\n"
+            "    perm = ('r' if s.is_readable() else '-') + ('w' if s.is_writable() else '-') + ('x' if s.is_executable() else '-')\n"
+            "    rows.append([hex(s.page_start), hex(s.page_end), perm, p])\n"
+            "__mdb_out = rows\n"
+        )
+        ok, obj = self._run_python_json(session_id, snippet)
+        if not ok:
+            return ("Error listing maps. `gdb_maps` needs GEF loaded (it uses "
+                    f"gef.memory.maps); start the session with a gef_path. Detail: {obj}")
+        return encode_table("maps", ["start", "end", "perm", "path"], obj,
+                            max_rows=_MAPS_MAX_ROWS)
+
+    @handle_gdb_errors("running python")
+    def run_python(self, session_id: str, code: str) -> str:
+        """Escape hatch: run an arbitrary Python `code` snippet inside gdb and return
+        its stdout. `gdb` and (if loaded) `gef` are in scope, so the full GEF Python
+        API is reachable for one-off structured extraction the dedicated tools don't
+        cover. Keep what you print small."""
+        gdb = self.sessionManager.get_session(session_id)
+        response = gdb.write("python exec(%r)" % code)
         return format_gdb_response(response)
