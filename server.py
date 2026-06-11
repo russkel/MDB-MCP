@@ -17,15 +17,34 @@ logger = logging.getLogger(__name__)
 
 # Path to a GEF fork bundled as a sibling of this server (e.g. the plugin's
 # vendor/gef next to vendor/MDB-MCP). Used as the default gef_path for gdb_start.
+# NOTE: this sibling only exists for in-place runs. When the server is installed
+# as a wheel and run via `uvx`/`pipx`, server.py lands in site-packages and the
+# sibling `../gef` is NOT packaged with it (it lives outside this repo), so this
+# path won't exist — hence the MDB_GEF_PATH env override below.
 _BUNDLED_GEF = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gef", "gef.py"))
 
 
 def _resolve_gef_path(gef_path):
-    """If no explicit gef_path is given, fall back to a bundled sibling gef.py."""
-    if gef_path is None and os.path.isfile(_BUNDLED_GEF):
+    """Resolve the headless GEF fork when no explicit gef_path is given.
+
+    Order: explicit arg > MDB_GEF_PATH env var > bundled sibling gef.py. The env
+    var is the reliable option under uvx/pipx, where the sibling doesn't exist.
+    Returns None if nothing resolves — gdb then starts WITHOUT GEF (losing TOON
+    compaction), so we log a visible warning rather than failing silently.
+    """
+    if gef_path:
+        return gef_path
+    env_path = os.environ.get("MDB_GEF_PATH")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    if os.path.isfile(_BUNDLED_GEF):
         return _BUNDLED_GEF
-    return gef_path
+    logger.warning(
+        "GEF fork not found (MDB_GEF_PATH=%r, bundled=%r); starting gdb WITHOUT "
+        "GEF. Output will be verbose/uncompacted — pass gef_path=... to gdb_start "
+        "or set MDB_GEF_PATH to the headless gef.py.", env_path, _BUNDLED_GEF)
+    return None
 
 try:
     debugger_tools, debugger_type = DebuggerFactory.create_tools()
@@ -194,5 +213,10 @@ def lldb_command(session_id: str, command: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-if __name__ == "__main__":
+def main():
+    """Console-script entry point so the server is runnable via uvx/uv tool."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

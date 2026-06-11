@@ -15,6 +15,9 @@ dependencies = [
     "pytest-asyncio>=1.0.0",
 ]
 
+[project.scripts]
+gdb-mcp = "server:main"
+
 [project.urls]
 Homepage = "https://github.com/smadi0x86/gdb-mcp"
 Repository = "https://github.com/smadi0x86/gdb-mcp"
@@ -25,7 +28,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["modules"]
-include = [
-    "server.py",
-    "modules/",
-]
+# server.py is a standalone top-level module (not inside a package), so it must
+# be force-included to land at the wheel root and stay importable as `server`.
+force-include = { "server.py" = "server.py" }
