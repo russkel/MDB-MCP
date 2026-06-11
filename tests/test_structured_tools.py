@@ -56,7 +56,9 @@ def test_read_mem_toon_emits_hexdump(live_session):
     assert out.startswith("hex[1]{addr,bytes,ascii}:")
     row = out.splitlines()[1].strip()
     assert row.startswith("0x")
-    assert row.endswith("`")     # ascii column is backtick-wrapped
+    # 16 bytes -> 32 hex chars in the 'bytes' column (no backtick wrapping anymore)
+    assert any(len(f) == 32 and all(c in "0123456789abcdef" for c in f)
+               for f in row.split(","))
 
 
 @pytest.mark.requires_gdb

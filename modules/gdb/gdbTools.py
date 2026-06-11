@@ -457,7 +457,7 @@ class GDBTools(DebuggerTools):
         a symbol) and render GEF-style `hex[N]{addr,bytes,ascii}:`. Native gdb API."""
         n = max(0, min(int(count), _READ_MEM_MAX))
         if n == 0:
-            return "hex[0]{addr,bytes,ascii}:"
+            return encode_hexdump(0, b"")  # -> "hex[0]:"
         snippet = (
             "import gdb\n"
             f"addr = int(gdb.parse_and_eval({address!r})) & ((1 << 64) - 1)\n"

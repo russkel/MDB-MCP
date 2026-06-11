@@ -13,6 +13,9 @@ dependencies = [
     "pygdbmi>=0.11.0.0",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    # Official TOON encoder used server-side to format structured-tool output.
+    # Pinned to the immutable beta tag (PyPI 0.1.0 is a non-functional stub).
+    "toon-format @ git+https://github.com/toon-format/toon-python@v0.9.0-beta.1",
 ]
 
 [project.scripts]
