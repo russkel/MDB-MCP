@@ -1,6 +1,7 @@
 """GDB session management module."""
 
 import logging
+import os
 import uuid
 import subprocess
 from typing import Dict
@@ -18,6 +19,16 @@ class GDBSessionManager(DebuggerSessionManager):
     def create_session(self, gdb_path: str = "gdb", gef_path: str = None) -> str:
         session_id = str(uuid.uuid4())
         command = [gdb_path, "-nx", "--interpreter=mi3"]
+        # MDB_PYTHONPATH (os.pathsep-separated, like PYTHONPATH) is prepended to gdb's
+        # embedded Python sys.path *before* GEF is sourced, so GEF/gef-extras and their
+        # third-party libraries (capstone, unicorn, ...) resolve. The venv it points at
+        # must match gdb's embedded Python version — these are imported by that
+        # interpreter, not the server's.
+        extra = os.environ.get("MDB_PYTHONPATH")
+        if extra:
+            paths = [p for p in extra.split(os.pathsep) if p]
+            if paths:
+                command += ["-ex", f"python import sys; sys.path[:0] = {paths!r}"]
         if gef_path:
             command += ["-ex", f"source {gef_path}"]
         try:

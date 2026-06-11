@@ -76,6 +76,7 @@ def test_terminate_session_kills_rr_process():
 
 def test_create_session_passes_nx_and_gef_source(monkeypatch):
     import modules.gdb.sessionManager as smmod
+    monkeypatch.delenv("MDB_PYTHONPATH", raising=False)
     captured = {}
 
     class _FakeController:
@@ -87,3 +88,37 @@ def test_create_session_passes_nx_and_gef_source(monkeypatch):
     sm.create_session("gdb", gef_path="/x/gef.py")
     assert captured["command"] == [
         "gdb", "-nx", "--interpreter=mi3", "-ex", "source /x/gef.py"]
+
+
+def test_create_session_injects_mdb_pythonpath(monkeypatch):
+    import modules.gdb.sessionManager as smmod
+    monkeypatch.setenv("MDB_PYTHONPATH", os.pathsep.join(["/opt/venv/site-packages", "/extra"]))
+    captured = {}
+
+    class _FakeController:
+        def __init__(self, command=None):
+            captured["command"] = command
+
+    monkeypatch.setattr(smmod, "GdbController", _FakeController)
+    sm = smmod.GDBSessionManager()
+    sm.create_session("gdb", gef_path="/x/gef.py")
+    cmd = captured["command"]
+    # the sys.path injection is present and ordered BEFORE the gef source
+    inject = "python import sys; sys.path[:0] = ['/opt/venv/site-packages', '/extra']"
+    assert inject in cmd
+    assert cmd.index(inject) < cmd.index("source /x/gef.py")
+
+
+def test_create_session_no_pythonpath_when_unset(monkeypatch):
+    import modules.gdb.sessionManager as smmod
+    monkeypatch.delenv("MDB_PYTHONPATH", raising=False)
+    captured = {}
+
+    class _FakeController:
+        def __init__(self, command=None):
+            captured["command"] = command
+
+    monkeypatch.setattr(smmod, "GdbController", _FakeController)
+    sm = smmod.GDBSessionManager()
+    sm.create_session("gdb")
+    assert not any("sys.path" in str(a) for a in captured["command"])
