@@ -8,8 +8,10 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.12.2",
-    "mcp[cli]>=1.10.1",
+    # mcp 2.x renamed FastMCP -> MCPServer and changed other APIs; server.py is v1 code,
+    # so an unbounded range resolves to 2.x and the server dies at import.
+    "mcp>=1.12.2,<2",
+    "mcp[cli]>=1.10.1,<2",
     "pygdbmi>=0.11.0.0",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
