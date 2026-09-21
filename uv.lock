@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 
 [[package]]
@@ -73,6 +73,7 @@ dependencies = [
     { name = "pygdbmi" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "toon-format" },
 ]
 
 [package.metadata]
@@ -82,6 +83,7 @@ requires-dist = [
     { name = "pygdbmi", specifier = ">=0.11.0.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "toon-format", git = "https://github.com/toon-format/toon-python?rev=v0.9.0-beta.1" },
 ]
 
 [[package]]
@@ -562,6 +564,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/0a/69/662169fdb92fb96ec
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/95/38ef0cd7fa11eaba6a99b3c4f5ac948d8bc6ff199aabd327a29cc000840c/starlette-0.47.1-py3-none-any.whl", hash = "sha256:5e11c9f5c7c3f24959edbf2dffdc01bba860228acf657129467d8a7468591527", size = 72747, upload-time = "2025-06-21T04:03:15.705Z" },
 ]
+
+[[package]]
+name = "toon-format"
+version = "0.9.0b1"
+source = { git = "https://github.com/toon-format/toon-python?rev=v0.9.0-beta.1#9f8d6f9ff3c519a018039146c9e99709143a2988" }
 
 [[package]]
 name = "typer"
