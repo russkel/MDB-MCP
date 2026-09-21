@@ -4,6 +4,7 @@ import json
 import logging
 import socket
 import subprocess
+import tempfile
 import time
 import shutil
 from pathlib import Path
@@ -158,6 +159,9 @@ class GDBTools(DebuggerTools):
         else:
             self.sessionManager._kill_rr_process(session_id)
             return f"Error: rr gdbserver did not bind port {port} in time"
+        # Must precede the connect: rr's gdbinit does `set non-stop off`, which gdb
+        # refuses once an inferior is running. rr's own launch line sources it first too.
+        note = self._source_rr_gdbinit(gdb)
         response = gdb.write(f"target extended-remote :{port}")
         # pygdbmi does NOT raise on a gdb-level error; detect a failed connect.
         connected = not any(
@@ -170,7 +174,41 @@ class GDBTools(DebuggerTools):
         # Local-architecture trace: point sysroot at the local fs to avoid slow
         # remote file transfers (matches rr's own gdb launch line).
         gdb.write("set sysroot /")
-        return format_gdb_response(response)
+        return format_gdb_response(response) + note
+
+    @staticmethod
+    def _source_rr_gdbinit(gdb) -> str:
+        """Define rr's own gdb commands in this session.
+
+        `when`, `when-ticks`, `when-tid`, `elapsed-time`, `checkpoint`, `restart`,
+        `seek-ticks` and `back`/`forward` are not gdb builtins and are not part of the
+        remote protocol -- `rr gdbinit` emits Python that defines them as wrappers around
+        `maint packet qRRCmd:<cmd>:<tid>`. rr only installs it when rr itself launches
+        gdb, so a session that connects with `target extended-remote` has none of them
+        until we source it here.
+
+        Best effort: a failure costs the navigation commands, not the replay session.
+        """
+        try:
+            init = subprocess.run(
+                ["rr", "gdbinit"], capture_output=True, text=True, timeout=30,
+            )
+            if init.returncode != 0 or not init.stdout:
+                return "\nWarning: `rr gdbinit` produced nothing; `when`/`seek-ticks` unavailable."
+            # gdb reads the file synchronously, so it can go away right after.
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".gdbinit", delete=True
+            ) as f:
+                f.write(init.stdout)
+                f.flush()
+                out = gdb.write(f"source {f.name}")
+            if any(
+                m.get("type") == "result" and m.get("message") == "error" for m in out
+            ):
+                return f"\nWarning: sourcing rr's gdbinit failed: {format_gdb_response(out)}"
+            return ""
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"\nWarning: could not load rr's gdb commands ({e}); `when`/`seek-ticks` unavailable."
     
     @handle_gdb_errors("loading core dump")
     def load_core_dump(self, session_id: str, core_file: str) -> str:
